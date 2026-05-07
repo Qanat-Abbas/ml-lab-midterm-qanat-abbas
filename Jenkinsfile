@@ -58,14 +58,26 @@ pipeline {
             }
         }
 
-        stage('Run Container') {
+        stage('Cleanup Old Container & Port') {
             steps {
                 sh '''
-                echo "Stopping old container if exists..."
+                echo "Stopping and removing old container..."
+
                 docker stop ml-container || true
                 docker rm ml-container || true
 
+                echo "Freeing port 8000 if occupied..."
+                docker ps -q --filter "publish=8000" | xargs -r docker stop || true
+                docker ps -a -q --filter "publish=8000" | xargs -r docker rm || true
+                '''
+            }
+        }
+
+        stage('Run Container') {
+            steps {
+                sh '''
                 echo "Running new container..."
+
                 docker run -d -p 8000:8000 --name ml-container ml-api
                 '''
             }
