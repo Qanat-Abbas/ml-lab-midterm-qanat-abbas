@@ -10,11 +10,21 @@ pipeline {
             }
         }
 
+        stage('Create Virtual Environment') {
+            steps {
+                sh '''
+                python3 -m venv venv
+                '''
+            }
+        }
+
         stage('Install Dependencies') {
             steps {
                 sh '''
-                python3 -m pip install --upgrade pip
-                pip3 install -r requirements.txt
+                . venv/bin/activate
+
+                python -m pip install --upgrade pip
+                pip install -r requirements.txt
                 '''
             }
         }
@@ -22,7 +32,7 @@ pipeline {
         stage('Fetch Dataset') {
             steps {
                 sh '''
-                echo "Dataset already in repo or generated"
+                echo "Checking dataset..."
                 ls -la dataset
                 '''
             }
@@ -31,8 +41,10 @@ pipeline {
         stage('Train Model') {
             steps {
                 sh '''
+                . venv/bin/activate
+
                 echo "Training model..."
-                python3 train.py
+                python train.py
                 '''
             }
         }
@@ -49,7 +61,7 @@ pipeline {
         stage('Run Container') {
             steps {
                 sh '''
-                echo "Stopping old container..."
+                echo "Stopping old container if exists..."
                 docker stop ml-container || true
                 docker rm ml-container || true
 
