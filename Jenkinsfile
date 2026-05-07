@@ -9,6 +9,17 @@ pipeline {
 
     stages {
 
+        stage('Clean Workspace') {
+            steps {
+                sh '''
+                echo "Cleaning old workspace artifacts..."
+                rm -rf venv
+                rm -rf __pycache__
+                rm -rf *.pkl
+                '''
+            }
+        }
+
         stage('Checkout Code') {
             steps {
                 git branch: 'main',
@@ -16,20 +27,46 @@ pipeline {
             }
         }
 
-        stage('Fetch Dataset') {
+        stage('Verify Dataset') {
             steps {
                 sh '''
-                echo "Dataset check..."
+                echo "Checking dataset..."
                 ls -la dataset
+
+                echo "Dataset row count:"
+                wc -l dataset/train.csv
                 '''
             }
         }
 
-        stage('Train Model (Docker-safe run)') {
+        stage('Train Model Inside Docker') {
             steps {
                 sh '''
-                echo "Training inside host (no venv)..."
-                python3 train.py || echo "Warning: training fallback"
+                echo "Training model inside Docker container..."
+
+                docker run --rm \
+                -v $(pwd):/app \
+                -w /app \
+                python:3.10 bash -c "
+                    pip install --no-cache-dir -r requirements.txt &&
+                    python train.py
+                "
+                '''
+            }
+        }
+
+        stage('Verify Model Files') {
+            steps {
+                sh '''
+                echo "Checking generated model artifacts..."
+
+                ls -la
+
+                test -f model.pkl
+                test -f metrics.json
+
+                echo "Metrics file content:"
+                cat metrics.json
                 '''
             }
         }
@@ -37,8 +74,11 @@ pipeline {
         stage('Build Docker Image') {
             steps {
                 sh '''
-                echo "Building Docker image..."
-                docker build -t $IMAGE_NAME .
+                echo "Removing old Docker image..."
+                docker rmi -f $IMAGE_NAME || true
+
+                echo "Building fresh Docker image..."
+                docker build --no-cache -t $IMAGE_NAME .
                 '''
             }
         }
@@ -52,7 +92,7 @@ pipeline {
                 echo "Removing old container..."
                 docker rm $CONTAINER_NAME || true
 
-                echo "Freeing port..."
+                echo "Freeing occupied port..."
                 fuser -k ${PORT}/tcp || true
                 '''
             }
@@ -61,8 +101,12 @@ pipeline {
         stage('Run Container') {
             steps {
                 sh '''
-                echo "Running new container..."
-                docker run -d -p 8000:8000 --name $CONTAINER_NAME $IMAGE_NAME
+                echo "Starting new container..."
+
+                docker run -d \
+                -p ${PORT}:8000 \
+                --name $CONTAINER_NAME \
+                $IMAGE_NAME
                 '''
             }
         }
@@ -70,19 +114,42 @@ pipeline {
         stage('Verify API') {
             steps {
                 sh '''
-                sleep 5
-                curl -f http://localhost:8000/metrics || echo "API not ready"
+                echo "Waiting for API startup..."
+                sleep 10
+
+                echo "Testing API endpoint..."
+                curl -f http://localhost:${PORT}/metrics
+
+                echo ""
+                echo "API verification successful ✅"
                 '''
             }
         }
     }
 
     post {
+
         success {
-            echo "Pipeline SUCCESS 🚀"
+            echo "=================================="
+            echo "PIPELINE SUCCESS 🚀"
+            echo "Model retrained successfully"
+            echo "Docker container deployed"
+            echo "API is live on port ${PORT}"
+            echo "=================================="
         }
+
         failure {
-            echo "Pipeline FAILED ❌ check logs"
+            echo "=================================="
+            echo "PIPELINE FAILED ❌"
+            echo "Check Jenkins console logs"
+            echo "=================================="
+        }
+
+        always {
+            sh '''
+            echo "Running containers:"
+            docker ps -a || true
+            '''
         }
     }
 }
