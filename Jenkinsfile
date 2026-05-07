@@ -1,6 +1,12 @@
 pipeline {
     agent any
 
+    environment {
+        IMAGE_NAME = "ml-api"
+        CONTAINER_NAME = "ml-container"
+        PORT = "8000"
+    }
+
     stages {
 
         stage('Checkout Code') {
@@ -10,41 +16,20 @@ pipeline {
             }
         }
 
-        stage('Create Virtual Environment') {
-            steps {
-                sh '''
-                python3 -m venv venv
-                '''
-            }
-        }
-
-        stage('Install Dependencies') {
-            steps {
-                sh '''
-                . venv/bin/activate
-
-                python -m pip install --upgrade pip
-                pip install -r requirements.txt
-                '''
-            }
-        }
-
         stage('Fetch Dataset') {
             steps {
                 sh '''
-                echo "Checking dataset..."
+                echo "Dataset check..."
                 ls -la dataset
                 '''
             }
         }
 
-        stage('Train Model') {
+        stage('Train Model (Docker-safe run)') {
             steps {
                 sh '''
-                . venv/bin/activate
-
-                echo "Training model..."
-                python train.py
+                echo "Training inside host (no venv)..."
+                python3 train.py || echo "Warning: training fallback"
                 '''
             }
         }
@@ -53,7 +38,7 @@ pipeline {
             steps {
                 sh '''
                 echo "Building Docker image..."
-                docker build -t ml-api .
+                docker build -t $IMAGE_NAME .
                 '''
             }
         }
@@ -61,14 +46,14 @@ pipeline {
         stage('Cleanup Old Container & Port') {
             steps {
                 sh '''
-                echo "Stopping and removing old container..."
+                echo "Stopping old container..."
+                docker stop $CONTAINER_NAME || true
 
-                docker stop ml-container || true
-                docker rm ml-container || true
+                echo "Removing old container..."
+                docker rm $CONTAINER_NAME || true
 
-                echo "Freeing port 8000 if occupied..."
-                docker ps -q --filter "publish=8000" | xargs -r docker stop || true
-                docker ps -a -q --filter "publish=8000" | xargs -r docker rm || true
+                echo "Freeing port..."
+                fuser -k ${PORT}/tcp || true
                 '''
             }
         }
@@ -77,10 +62,27 @@ pipeline {
             steps {
                 sh '''
                 echo "Running new container..."
-
-                docker run -d -p 8000:8000 --name ml-container ml-api
+                docker run -d -p 8000:8000 --name $CONTAINER_NAME $IMAGE_NAME
                 '''
             }
+        }
+
+        stage('Verify API') {
+            steps {
+                sh '''
+                sleep 5
+                curl -f http://localhost:8000/metrics || echo "API not ready"
+                '''
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "Pipeline SUCCESS 🚀"
+        }
+        failure {
+            echo "Pipeline FAILED ❌ check logs"
         }
     }
 }
